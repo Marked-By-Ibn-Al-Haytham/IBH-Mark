@@ -40,7 +40,7 @@ pip install "watermarkbench[all] @ git+https://github.com/JPEG-Trust-Community/w
 
 ```bash
 cd Swin_Unet
-wget 
+python download_swin_ckpt.py
 ```
 
 

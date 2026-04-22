@@ -13,6 +13,8 @@ configs_org.py
 *.userosscache
 *.sln.docstates
 
+.vscode
+*.pth
 exps-badran/
 yolov10x.pt
 # User-specific files (MonoDevelop/Xamarin Studio)
