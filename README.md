@@ -1,9 +1,5 @@
 # Marked by IBH
 
-Wavelet-domain watermarking for AI-generated image provenance, built on the InvisMark baseline.
-
-Baseline paper (InvisMark): https://arxiv.org/pdf/2411.07795
-
 ## Overview
 
 Marked by IBH takes InvisMark as the baseline architecture and extends it with a DWT-based embedding and extraction path.
@@ -179,8 +175,8 @@ View logs:
 tensorboard --logdir ./exps
 ```
 
-## Notes
+## Acknowledgements:
 
-- Replace the paths in the example commands with your own paths.
-- The shell scripts in the repo are experiment-specific examples, not ready-to-run defaults.
-- Marked by IBH is built upon InvisMark as the baseline and adapts the pipeline to support wavelet-domain watermarking.
+Marked by IBH is built upon [InvisMark](https://arxiv.org/abs/2411.07795) as the baseline and adapts the pipeline to support wavelet-domain watermarking. 
+
+<hr>
