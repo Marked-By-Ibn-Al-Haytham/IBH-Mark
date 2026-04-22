@@ -2,7 +2,7 @@
 
 ## Overview
 
-Marked by IBH takes InvisMark as the baseline architecture and extends it with a DWT-based embedding and extraction path.
+Marked by IBH is a robust DWT-based watermarking system against attacks and manipulations extending InvisMark.
 
 The method:
 
