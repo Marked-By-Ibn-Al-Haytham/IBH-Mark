@@ -1,5 +1,8 @@
 # Marked by IBH
 
+<img width="1672" height="941" alt="ChatGPT Image Apr 22, 2026, 05_48_20 PM(1)" src="https://github.com/user-attachments/assets/66346875-012e-463b-994d-d9b4e9d82e7f" />
+
+
 ## Overview
 
 Marked by IBH is a robust DWT-based watermarking system against attacks and manipulations extending InvisMark.
