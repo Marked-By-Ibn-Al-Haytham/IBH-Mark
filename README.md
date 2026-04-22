@@ -29,18 +29,20 @@ Main entrypoints:
 ## Installation
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
+python create -n marked-by-ibh python=3.10
+conda activate marked-by-ibh
 pip install -r requirements.txt
 ```
 
-Optional:
-
 ```bash
-pip install wandb
 pip install "watermarkbench[all] @ git+https://github.com/JPEG-Trust-Community/watermarking.git#subdirectory=evaluation_metric/package"
 ```
+
+```bash
+cd Swin_Unet
+wget 
+```
+
 
 ## Dataset Format
 
@@ -171,9 +173,15 @@ Training writes:
 
 View logs:
 
+You can view logs from WandB or TensorBoard. 
+
+For TensorBoard:
+
 ```bash
 tensorboard --logdir ./exps
 ```
+
+For WandB, use `--wandb` flag in the train.sh, add the `--wandb_api_key` and `--wandb_project` for the project name. Logs will be uploaded to WandB.
 
 ## Acknowledgements:
 

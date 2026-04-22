@@ -54,6 +54,6 @@ class ModelConfig:
     # Swin-UNet encoder config
     use_swin_encoder: bool = False
     swin_config_path: str = "Swin_Unet/swin_tiny_patch4_window7_224_lite.yaml"
-    swin_pretrained_path: str = "/scratch/dr/n.hossam/invismark/model.pth"
+    swin_pretrained_path: str = "Swin_Unet/model.pth"
     swin_img_size: int = 224
     swin_freeze_encoder: bool = False

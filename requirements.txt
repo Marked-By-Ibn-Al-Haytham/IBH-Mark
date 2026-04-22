@@ -27,3 +27,4 @@ torchmetrics==1.4.1
 torchvision==0.19.1
 timm
 convnext-unet
+wandb
