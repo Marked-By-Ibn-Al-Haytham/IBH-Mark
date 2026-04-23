@@ -97,6 +97,8 @@ DWT encoder choices:
 
 ## Training
 
+- Training script can be found in `scripts/train.sh`, which you can modify with your paths and settings.
+
 Example:
 
 ```bash
@@ -139,7 +141,7 @@ python trainer.py \
 
 ## Evaluation
 
-Standard evaluation:
+- Evaluation script can be found in `scripts/eval.sh`, which you can modify with your paths and settings.
 
 ```bash
 python eval.py \
