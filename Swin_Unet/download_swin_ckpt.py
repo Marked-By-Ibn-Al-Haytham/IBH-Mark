@@ -30,7 +30,6 @@ def main() -> int:
         url=DEFAULT_FILE_LINK,
         output=str(output_path),
         quiet=False,
-        fuzzy=True,
     )
 
     if not output_path.exists() or output_path.stat().st_size == 0:
