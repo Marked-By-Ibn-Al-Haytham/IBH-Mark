@@ -1,6 +1,6 @@
 #!/bin/bash
 
-python trainer.py \
+python ../trainer.py \
     --ckpt_path "./exps/dwt/ckpts" \
     --log_dir "./exps/dwt/runs" \
     --name "dwt" \
