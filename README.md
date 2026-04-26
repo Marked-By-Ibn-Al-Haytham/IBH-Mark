@@ -27,6 +27,8 @@ Main entrypoints:
 
 ## Architecture
 
+<img width="1641" height="857" alt="arch_light" src="https://github.com/user-attachments/assets/02249fc9-19d8-457c-a503-c6e8528c1fdb" />
+
 
 
 ## Installation
