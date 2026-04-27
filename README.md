@@ -141,6 +141,10 @@ python trainer.py \
   --use_dwt
 ```
 
+  
+## Trained Model Checkpoint
+The trained model checkpoint is available on (https://huggingface.co/MBadran/Marked-By-IBH/tree/main).
+
 ## Evaluation
 
 - Evaluation script can be found in `scripts/eval.sh`, which you can modify with your paths and settings.
