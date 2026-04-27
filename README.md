@@ -194,6 +194,63 @@ tensorboard --logdir ./exps
 
 For WandB, use `--wandb` flag in the train.sh, add the `--wandb_api_key` and `--wandb_project` for the project name. Logs will be uploaded to WandB.
 
+
+## Watermark Challenge Results
+
+### Embedding Distortion Performance
+
+| Metric | Camera Capture | Synthetic |
+|--------|:--------------:|:---------:|
+| PSNR | 58.54 | 58.69 |
+| wPSNR | 53.69 | 53.83 |
+| SSIM | 0.9996 | 0.9995 |
+| JND Pass Rate | 1.0000 | 1.0000 |
+| FID | 0.0695 | 0.0752 |
+
+---
+
+### Robustness Evaluation (BER)
+
+#### Signal Processing Attacks
+
+| Attack | Camera Capture | Synthetic |
+|--------|:--------------:|:---------:|
+| Gaussian Noise | 0.0715 | 0.0970 |
+| Speckle Noise | 0.0671 | 0.0777 |
+| Blurring | 0.0282 | 0.0253 |
+| Brightness Adjustment | 0.0490 | 0.0435 |
+| Sharpness Adjustment | 0.0294 | 0.0267 |
+| Gamma Correction | 0.0417 | 0.0317 |
+| Histogram Equalization | 0.0240 | 0.0177 |
+| Median Filtering | 0.0327 | 0.0300 |
+
+#### Geometric Attacks
+
+| Attack | Camera Capture | Synthetic |
+|--------|:--------------:|:---------:|
+| Rotation | 0.0345	| 0.0344  |
+| Resizing | 0.0278 | 0.0256 |
+| Scaling | 0.0288 | 0.0264 |
+| Cropping | 0.1056 | 0.0871 |
+| Flipping | 0.0561 | 0.0443 |
+
+#### Compression Attacks
+
+| Attack | Camera Capture | Synthetic |
+|--------|:--------------:|:---------:|
+| JPEG | 0.1252 | 0.1880 |
+| JPEG 2000 | 0.0393 | 0.0428 |
+| JPEG XS | 0.3174 | 0.2891 |
+| JPEG XL | 0.1626 | 0.2612 |
+| JPEG AI | 0.4074 | 0.4353 |
+
+#### Generative AI Manipulation Attacks
+
+| Attack | Camera Capture | Synthetic |
+|--------|:--------------:|:---------:|
+| AI-Manipulation (Remove) | 0.1146 | 0.1441 |
+
+
 ## Acknowledgements:
 
 Marked by IBH is built upon [InvisMark](https://arxiv.org/abs/2411.07795) as the baseline and adapts the pipeline to support wavelet-domain watermarking. 
