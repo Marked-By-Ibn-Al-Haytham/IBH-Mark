@@ -12,7 +12,7 @@ import metrics
 import utils
 import uuid
 import re
-
+from attack.attacks import rotate_tensor
 try:
     from metrics_challange import fidelity
 except Exception as ex:
@@ -173,6 +173,15 @@ class Watermark(nn.Module):
                 transforms.Resize(64),
             ]
         )
+
+        self.transform3 =  transforms.Compose(
+            [
+                transforms.Resize(256),
+
+            ]
+        )
+
+        self.image_enhancer = model_dwt.ImageEnhancer().to(device)
 
         if self.use_dct:
             self.dct2d = dct_module.DCT2D().to(device)
@@ -602,7 +611,12 @@ class Watermark(nn.Module):
 
     def _decode(self, images):
         
-        ######### ( to test )
+        angle = self.image_enhancer(self.transform3(images))
+        if angle > 10:
+            noiser_angle = lambda x: rotate_tensor(x, angle=-15)
+            images = noiser_angle(images)
+   
+
         trans_images = self.transform(images)
         # trans_images = images
         
@@ -937,6 +951,7 @@ class Watermark(nn.Module):
         self.cur_epoch = state_dict["cur_epoch"]
         self.cur_step = state_dict["cur_step"]
         self.config = state_dict["config"]
+        self.image_enhancer.load_state_dict(state_dict["image_enhancer_state_dict"])
 
     # def _save_model(self):
     #     if not os.path.exists(self.config.ckpt_path):
@@ -971,6 +986,7 @@ class Watermark(nn.Module):
                 "opt_encoder_state_dict": self.opt_encoder.state_dict(),
                 "opt_decoder_state_dict": self.opt_decoder.state_dict(),
                 "opt_discriminator_state_dict": self.opt_discriminator.state_dict(),
+                "image_enhancer_state_dict": self.image_enhancer.state_dict(),
                 "cur_epoch": self.cur_epoch,
                 "cur_step": self.cur_step,
                 "config": self.config,

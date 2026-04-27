@@ -19,11 +19,16 @@ from torchvision.models import (
     swin_s,
     swin_t,
 )
+import torchvision.models as models
+import torch.nn.functional as F
+
 from torchvision.models.feature_extraction import create_feature_extractor
 from torchvision.models import Swin_T_Weights
 from Swin_Unet.swin_transformer_unet_skip_expand_decoder_sys import SwinTransformerSys
 from convnext_unet import ConvNeXtUnet
 logger = logging.getLogger(__name__)
+from torchvision.models import resnet18
+
 
 
 class LayerNorm2d(nn.LayerNorm):
@@ -811,6 +816,31 @@ class ExtractorConvNeXT(nn.Module):
         subbands: (B, 21, H/4, W/4) — output of HaarDWT2D
         """
         return self.main(subbands)
+
+
+
+
+class ImageEnhancer(nn.Module):
+    """A small CNN that regresses a rotation angle from an image of any size."""
+    def __init__(self, in_channels: int = 3, base_channels: int = 32):
+        super().__init__()        
+        backbone = resnet18(pretrained=True)
+        self.features = nn.Sequential(*list(backbone.children())[:-1])
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),  
+        )
+        
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        return self.head(x).squeeze(-1)
+
+
+
+
 
 
 class BCHECC:
