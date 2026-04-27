@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import logging
 import io
 import math
 import numpy as np
@@ -11,8 +13,10 @@ import shutil
 from pathlib import Path
 from ._weights import ensure_sam_checkpoint
 from torchvision.transforms import InterpolationMode
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageFilter
 import torchvision.io as tvio
+
+logger = logging.getLogger(__name__)
 
 try:
     import pillow_jxl
@@ -185,6 +189,28 @@ def rotate_tensor(x: torch.Tensor, angle: Optional[float] = None) -> torch.Tenso
 
     return _apply_attack_preserve(x, _core)
 
+def rotate_tensor_inverse(x: torch.Tensor, angle: Optional[float] = None) -> torch.Tensor:
+    # Rotate an image tensor by angle degrees (sample angle when None)
+    if angle is None:
+        angle = float(torch.empty(1).uniform_(-25.0, 25.0).item())
+
+    def _core(z: torch.Tensor):
+        z = TF.rotate(
+            z,
+            angle=float(angle),
+            interpolation=InterpolationMode.BILINEAR,
+            expand=False,
+            fill=-1.0,
+        )
+        return TF.rotate(
+            z,
+            angle=float(-angle),
+            interpolation=InterpolationMode.BILINEAR,
+            expand=False,
+            fill=-1.0,
+        )
+
+    return _apply_attack_preserve(x, _core)
 
 def rotate_tensor_keep_all(x, angle, fill=-1.0):
     # Step 1: rotate with expansion (no cropping)
@@ -317,7 +343,6 @@ def resized(x: torch.Tensor, pct: Optional[int] = None) -> torch.Tensor:
     # Downsample by a percentage amount, then upsample back to original size
     if pct is None:
         pct = int(torch.randint(low=10, high=41, size=(1,)).item())
-
     def _core(z: torch.Tensor):
         _, _, H, W = z.shape
         level_ratio = int(pct) / 100.0
@@ -674,17 +699,453 @@ def jpegxl_compression(x: torch.Tensor, quality: int = 50) -> torch.Tensor:
     return _apply_attack_preserve(x, _core)
 
 
+# def jpegxs_compression(
+#     x: torch.Tensor,
+#     bitrate: str = "40M",
+#     pix_fmt: str = "yuv444p10le",
+# ) -> torch.Tensor:
+#     # Applies JPEG-XS encode/decode via ffmpeg and returns the reconstructed tensor
+#     def _run_cmd(cmd, timeout: int, label: str, retry_timeout: Optional[int] = None):
+#         # Retry once with a larger timeout for transient ffmpeg stalls under heavy load.
+#         try:
+#             proc = subprocess.run(
+#                 cmd,
+#                 capture_output=True,
+#                 text=True,
+#                 timeout=timeout,
+#             )
+#         except subprocess.TimeoutExpired as e:
+#             if retry_timeout is None:
+#                 raise RuntimeError(
+#                     f"{label} timed out after {timeout}s.\nCommand: {' '.join(cmd)}"
+#                 ) from e
+#             logger.warning(
+#                 "%s timed out after %ss; retrying once with %ss",
+#                 label,
+#                 timeout,
+#                 retry_timeout,
+#             )
+#             try:
+#                 proc = subprocess.run(
+#                     cmd,
+#                     capture_output=True,
+#                     text=True,
+#                     timeout=retry_timeout,
+#                 )
+#             except subprocess.TimeoutExpired as e2:
+#                 raise RuntimeError(
+#                     f"{label} timed out after retry ({retry_timeout}s).\n"
+#                     f"Command: {' '.join(cmd)}"
+#                 ) from e2
+
+#         if proc.returncode != 0:
+#             raise RuntimeError(
+#                 f"{label} failed (code={proc.returncode}).\n"
+#                 f"Command: {' '.join(cmd)}\n"
+#                 f"stderr:\n{proc.stderr}"
+#             )
+#         return proc
+
+#     def _core(z: torch.Tensor):
+#         enc_app = shutil.which("SvtJpegxsEncApp")
+#         dec_app = shutil.which("SvtJpegxsDecApp")
+#         if not enc_app or not dec_app:
+#             raise RuntimeError(
+#                 "SvtJpegxsEncApp / SvtJpegxsDecApp not found on PATH."
+#             )
+
+#         device = z.device
+#         z_cpu = z.detach().cpu().clamp(-1.0, 1.0)
+#         B, C, H, W = z_cpu.shape
+#         outs = []
+
+#         # SVT-JPEG-XS expects --bpp. Keep "bitrate" API for compatibility and map it.
+#         # If value looks like bits/sec (e.g., 40M), convert to bpp with a 30 FPS assumption.
+#         br_str = str(bitrate).strip()
+#         fps_assumed = 30.0
+#         if br_str.upper().endswith("M"):
+#             br_bps = float(br_str[:-1]) * 1_000_000.0
+#             bpp = br_bps / (float(H) * float(W) * fps_assumed)
+#         elif br_str.upper().endswith("K"):
+#             br_bps = float(br_str[:-1]) * 1_000.0
+#             bpp = br_bps / (float(H) * float(W) * fps_assumed)
+#         else:
+#             v = float(br_str)
+#             # Small numeric values are treated as direct bpp; larger ones as bits/sec.
+#             bpp = v if v <= 64.0 else (v / (float(H) * float(W) * fps_assumed))
+#         bpp = max(0.01, float(bpp))
+
+#         # Map pix_fmt → SVT app format string and bit depth
+#         fmt_map = {
+#             "yuv444p10le": ("yuv444", 10),
+#             "yuv422p10le": ("yuv422", 10),
+#             "yuv420p10le": ("yuv420", 10),
+#             "yuv444p":     ("yuv444",  8),
+#             "yuv422p":     ("yuv422",  8),
+#             "yuv420p":     ("yuv420",  8),
+#         }
+#         svt_fmt, bit_depth = fmt_map.get(str(pix_fmt), ("yuv444", 10))
+
+#         for i in range(B):
+#             x01 = (z_cpu[i] + 1.0) / 2.0
+#             img_u8 = (x01 * 255.0).round().clamp(0, 255).to(torch.uint8)
+
+#             if img_u8.shape[0] == 1:
+#                 img_np = img_u8[0].numpy()
+#                 img_pil = Image.fromarray(img_np, mode="L").convert("RGB")
+#             else:
+#                 img_np = img_u8.permute(1, 2, 0).numpy()
+#                 img_pil = Image.fromarray(img_np, mode="RGB")
+
+#             with tempfile.TemporaryDirectory() as td:
+#                 td = Path(td)
+#                 in_png  = td / "in.png"
+#                 raw_yuv = td / "in.yuv"
+#                 out_jxs = td / "out.jxs"
+#                 out_yuv = td / "out.yuv"
+#                 out_png = td / "out.png"
+
+#                 img_pil.save(in_png)
+
+#                 try:
+#                     # 1) PNG → raw YUV via ffmpeg
+#                     _run_cmd([
+#                         "ffmpeg", "-y",
+#                         "-i", str(in_png),
+#                         "-f", "rawvideo",
+#                         "-pix_fmt", str(pix_fmt),
+#                         str(raw_yuv),
+#                     ], timeout=30, label="PNG→YUV")
+
+#                     # 2) raw YUV → JXS via SvtJpegxsEncApp
+#                     _run_cmd([
+#                         enc_app,
+#                         "-i", str(raw_yuv),
+#                         "-b", str(out_jxs),
+#                         "-w", str(W),
+#                         "-h", str(H),
+#                         "-n", "1",
+#                         "--input-depth", str(bit_depth),
+#                         "--colour-format", svt_fmt,
+#                         "--bpp", f"{bpp:.4f}",
+#                     ], timeout=45, label="JXS encode")
+
+#                     # 3) JXS → raw YUV via SvtJpegxsDecApp
+#                     _run_cmd([
+#                         dec_app,
+#                         "-i", str(out_jxs),
+#                         "-o", str(out_yuv),
+#                     ], timeout=60, label="JXS decode")
+
+#                     # 4) raw YUV → PNG via ffmpeg (this is where timeout spikes commonly happen)
+#                     _run_cmd([
+#                         "ffmpeg", "-y",
+#                         "-f", "rawvideo",
+#                         "-pix_fmt", str(pix_fmt),
+#                         "-s", f"{W}x{H}",
+#                         "-i", str(out_yuv),
+#                         "-pix_fmt", "rgb24",
+#                         str(out_png),
+#                     ], timeout=30, retry_timeout=90, label="YUV→PNG")
+
+#                     dec_pil = Image.open(out_png)
+#                     if img_u8.shape[0] == 1:
+#                         dec_pil = dec_pil.convert("L")
+#                         dec_np = np.array(dec_pil, dtype=np.uint8)
+#                         dec_u8 = torch.from_numpy(dec_np).unsqueeze(0)
+#                     else:
+#                         dec_pil = dec_pil.convert("RGB")
+#                         dec_np = np.array(dec_pil, dtype=np.uint8)
+#                         dec_u8 = torch.from_numpy(dec_np).permute(2, 0, 1).contiguous()
+#                 except Exception as e:
+#                     # Never let a single eval sample kill training; pass-through keeps validation running.
+#                     logger.warning("JPEGXS sample fallback (using input unchanged): %s", e)
+#                     dec_u8 = img_u8
+
+#             dec_f = dec_u8.to(torch.float32) / 255.0
+#             dec_m11 = (dec_f * 2.0 - 1.0).clamp(-1.0, 1.0)
+#             outs.append(dec_m11)
+
+#         return torch.stack(outs, dim=0).to(device)
+
+#     return _apply_attack_preserve(x, _core)
+
+
+
+# def jpegxs_compression(
+#     x: torch.Tensor,
+#     bitrate: str = "40M",
+#     pix_fmt: str = "yuv444p10le",
+# ) -> torch.Tensor:
+#     # Applies JPEG-XS encode/decode via ffmpeg and returns the reconstructed tensor
+#     def _core(z: torch.Tensor):
+#         if shutil.which("ffmpeg") is None:
+#             raise RuntimeError(
+#                 "ffmpeg not found on PATH. Install ffmpeg built with libsvtjpegxs "
+#                 "(--enable-libsvtjpegxs) to use jpegxs_compression."
+#             )
+
+#         device = z.device
+#         z_cpu = z.detach().cpu().clamp(-1.0, 1.0)
+
+#         B, C, H, W = z_cpu.shape
+#         outs = []
+
+#         br = bitrate
+#         if isinstance(br, (int, float, np.integer, np.floating)):
+#             br = f"{int(br)}M"
+#         br = str(br)
+
+#         for i in range(B):
+#             x01 = (z_cpu[i] + 1.0) / 2.0
+#             img_u8 = (x01 * 255.0).round().clamp(0, 255).to(torch.uint8)
+
+#             if img_u8.shape[0] == 1:
+#                 img_np = img_u8[0].numpy()
+#                 img_pil = Image.fromarray(img_np, mode="L")
+#             else:
+#                 img_np = img_u8.permute(1, 2, 0).numpy()
+#                 img_pil = Image.fromarray(img_np, mode="RGB")
+
+#             with tempfile.TemporaryDirectory() as td:
+#                 td = Path(td)
+#                 in_png  = td / "in.png"
+#                 out_mxf = td / "out.mxf"        # ← MXF instead of .jxs
+#                 out_png = td / "out.png"
+
+#                 img_pil.save(in_png)
+
+#                 encode_cmd = [
+#                     "ffmpeg", "-y",
+#                     "-i", str(in_png),           # ← drop `-loop 1`
+#                     "-frames:v", "1",
+#                     "-c:v", "libsvtjpegxs",
+#                     "-pix_fmt", str(pix_fmt),
+#                     "-b:v", br,
+#                     str(out_mxf),                # ← .mxf
+#                 ]
+
+#                 enc = subprocess.run(encode_cmd, capture_output=True, text=True, timeout=45)
+#                 if enc.returncode != 0:
+#                     raise RuntimeError(
+#                         "JPEG-XS encode failed.\n"
+#                         f"Command: {' '.join(encode_cmd)}\n"
+#                         f"stderr:\n{enc.stderr}"
+#                     )
+
+#                 decode_cmd = [
+#                     "ffmpeg", "-y",
+#                     "-i", str(out_mxf),          # ← .mxf
+#                     "-frames:v", "1",
+#                     "-pix_fmt", "rgb24",
+#                     str(out_png),
+#                 ]
+
+#                 dec = subprocess.run(decode_cmd, capture_output=True, text=True, timeout=45)
+#                 if dec.returncode != 0:
+#                     raise RuntimeError(
+#                         "JPEG-XS decode failed.\n"
+#                         f"Command: {' '.join(decode_cmd)}\n"
+#                         f"stderr:\n{dec.stderr}"
+#                     )
+
+#                 dec_pil = Image.open(out_png)
+#                 if img_u8.shape[0] == 1:
+#                     dec_pil = dec_pil.convert("L")
+#                     dec_np = np.array(dec_pil, dtype=np.uint8)
+#                     dec_u8 = torch.from_numpy(dec_np).unsqueeze(0)
+#                 else:
+#                     dec_pil = dec_pil.convert("RGB")
+#                     dec_np = np.array(dec_pil, dtype=np.uint8)
+#                     dec_u8 = torch.from_numpy(dec_np).permute(2, 0, 1).contiguous()
+
+#             dec_f = dec_u8.to(torch.float32) / 255.0
+#             dec_m11 = (dec_f * 2.0 - 1.0).clamp(-1.0, 1.0)
+#             outs.append(dec_m11)
+
+#         return torch.stack(outs, dim=0).to(device)
+
+#     return _apply_attack_preserve(x, _core)
+
+
+# def jpegxs_compression(
+#     x: torch.Tensor,
+#     bitrate: str = "40M",
+#     pix_fmt: str = "yuv444p10le",
+# ) -> torch.Tensor:
+#     # Applies JPEG-XS encode/decode via ffmpeg and returns the reconstructed tensor
+#     def _core(z: torch.Tensor):
+#         if shutil.which("ffmpeg") is None:
+#             raise RuntimeError(
+#                 "ffmpeg not found on PATH. Install ffmpeg built with libsvtjpegxs "
+#                 "(--enable-libsvtjpegxs) to use jpegxs_compression."
+#             )
+
+#         device = z.device
+#         z_cpu = z.detach().cpu().clamp(-1.0, 1.0)
+
+#         B, C, H, W = z_cpu.shape
+#         outs = []
+
+        
+#         br = bitrate
+#         if isinstance(br, (int, float, np.integer, np.floating)):
+#             br = f"{int(br)}M"
+#         br = str(br)
+        
+#         # check for image size, if it lower than 256x256 use br 500M to avoid ffmpeg stalling on very small inputs with low bitrate
+#         if H < 512 or W < 512:
+#             br = "500M"
+
+#         for i in range(B):
+#             x01 = (z_cpu[i] + 1.0) / 2.0
+#             img_u8 = (x01 * 255.0).round().clamp(0, 255).to(torch.uint8)
+
+#             if img_u8.shape[0] == 1:
+#                 img_np = img_u8[0].numpy()
+#                 img_pil = Image.fromarray(img_np, mode="L")
+#             else:
+#                 img_np = img_u8.permute(1, 2, 0).numpy()
+#                 img_pil = Image.fromarray(img_np, mode="RGB")
+
+#             with tempfile.TemporaryDirectory() as td:
+#                 td = Path(td)
+#                 in_png  = td / "in.png"
+#                 out_jxs = td / "out.jxs"
+#                 out_png = td / "out.png"
+
+#                 img_pil.save(in_png)
+
+#                 # ENCODE: Remove -f rawvideo, use default muxer for .jxs
+#                 # We keep the high bitrate for small images
+#                 encode_cmd = [
+#                     "ffmpeg", "-y",
+#                     "-i", str(in_png),
+#                     "-frames:v", "1",
+#                     "-c:v", "libsvtjpegxs",
+#                     "-pix_fmt", str(pix_fmt),
+#                     "-b:v", br,
+#                     str(out_jxs),
+#                 ]
+
+#                 enc = subprocess.run(encode_cmd, capture_output=True, text=True, timeout=45)
+#                 if enc.returncode != 0:
+#                     raise RuntimeError(f"JPEG-XS encode failed.\n{enc.stderr}")
+
+#                 # DECODE: Help the decoder by defining the pixel format it's about to see
+#                 decode_cmd = [
+#                     "ffmpeg", "-y",
+#                     "-probesize", "15M",
+#                     "-analyzeduration", "15M",
+#                     "-c:v", "libsvtjpegxs", # Explicitly load the codec
+#                     "-f", "jpegxs_pipe",
+#                     "-i", str(out_jxs),
+#                     "-frames:v", "1",
+#                     "-pix_fmt", "rgb24",
+#                     str(out_png),
+#                 ]
+
+#                 dec = subprocess.run(decode_cmd, capture_output=True, text=True, timeout=45)
+#                 if dec.returncode != 0:
+#                     # If it still fails, it's likely a header size issue with SVT
+#                     raise RuntimeError(f"JPEG-XS decode failed.\n{dec.stderr}")
+
+#                 dec_pil = Image.open(out_png)
+#                 if img_u8.shape[0] == 1:
+#                     dec_pil = dec_pil.convert("L")
+#                     dec_np = np.array(dec_pil, dtype=np.uint8)
+#                     dec_u8 = torch.from_numpy(dec_np).unsqueeze(0)
+#                 else:
+#                     dec_pil = dec_pil.convert("RGB")
+#                     dec_np = np.array(dec_pil, dtype=np.uint8)
+#                     dec_u8 = torch.from_numpy(dec_np).permute(2, 0, 1).contiguous()
+
+#             dec_f = dec_u8.to(torch.float32) / 255.0
+#             dec_m11 = (dec_f * 2.0 - 1.0).clamp(-1.0, 1.0)
+#             outs.append(dec_m11)
+
+#         return torch.stack(outs, dim=0).to(device)
+
+#     return _apply_attack_preserve(x, _core)
+def _jpegxs_single(img_pil, num_channels, pix_fmt, br, max_retries=3):
+    """Encode/decode a single image via JPEG-XS. Returns uint8 tensor or None on failure."""
+    for attempt in range(max_retries):
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                in_png  = td / "in.png"
+                out_jxs = td / "out.jxs"
+                out_png = td / "out.png"
+
+                img_pil.save(in_png)
+
+                # Encode
+                encode_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(in_png),
+                    "-frames:v", "1",
+                    "-c:v", "libsvtjpegxs",
+                    "-pix_fmt", str(pix_fmt),
+                    "-b:v", br,
+                    str(out_jxs),
+                ]
+
+                enc = subprocess.run(encode_cmd, capture_output=True, text=True, timeout=30)
+                if enc.returncode != 0:
+                    continue
+
+                if not out_jxs.exists() or out_jxs.stat().st_size == 0:
+                    continue
+
+                # Small delay to ensure file is fully flushed
+                import time
+                time.sleep(0.05)
+
+                # Decode
+                decode_cmd = [
+                    "ffmpeg", "-y",
+                    "-probesize", "50M",
+                    "-analyzeduration", "50M",
+                    "-i", str(out_jxs),
+                    "-frames:v", "1",
+                    "-update", "1",
+                    str(out_png),
+                ]
+
+                dec = subprocess.run(decode_cmd, capture_output=True, text=True, timeout=30)
+                if dec.returncode != 0:
+                    continue
+
+                if not out_png.exists():
+                    continue
+
+                dec_pil = Image.open(out_png)
+                if num_channels == 1:
+                    dec_pil = dec_pil.convert("L")
+                    dec_np = np.array(dec_pil, dtype=np.uint8)
+                    return torch.from_numpy(dec_np).unsqueeze(0)
+                else:
+                    dec_pil = dec_pil.convert("RGB")
+                    dec_np = np.array(dec_pil, dtype=np.uint8)
+                    return torch.from_numpy(dec_np).permute(2, 0, 1).contiguous()
+
+        except Exception as e:
+            print(f"[JPEGXS] Attempt {attempt+1}/{max_retries} exception: {e}")
+            continue
+
+    print(f"[JPEGXS] All {max_retries} attempts failed, using fallback (passthrough).")
+    return None
+
+
 def jpegxs_compression(
     x: torch.Tensor,
     bitrate: str = "40M",
     pix_fmt: str = "yuv444p10le",
 ) -> torch.Tensor:
-    # Applies JPEG-XS encode/decode via ffmpeg and returns the reconstructed tensor
     def _core(z: torch.Tensor):
         if shutil.which("ffmpeg") is None:
             raise RuntimeError(
-                "ffmpeg not found on PATH. Install ffmpeg built with libsvtjpegxs "
-                "(--enable-libsvtjpegxs) to use jpegxs_compression."
+                "ffmpeg not found on PATH. Install ffmpeg built with libsvtjpegxs."
             )
 
         device = z.device
@@ -709,76 +1170,21 @@ def jpegxs_compression(
                 img_np = img_u8.permute(1, 2, 0).numpy()
                 img_pil = Image.fromarray(img_np, mode="RGB")
 
-            with tempfile.TemporaryDirectory() as td:
-                td = Path(td)
-                in_png = td / "in.png"
-                out_jxs = td / "out.jxs"
-                out_png = td / "out.png"
+            decoded = _jpegxs_single(img_pil, img_u8.shape[0], pix_fmt, br)
 
-                img_pil.save(in_png)
+            if decoded is None:
+                # Fallback: return original unchanged (no crash)
+                decoded = img_u8
 
-                encode_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-loop",
-                    "1",
-                    "-i",
-                    str(in_png),
-                    "-frames:v",
-                    "1",
-                    "-c:v",
-                    "libsvtjpegxs",
-                    "-pix_fmt",
-                    str(pix_fmt),
-                    "-b:v",
-                    br,
-                    str(out_jxs),
-                ]
-
-                enc = subprocess.run(encode_cmd, capture_output=True, text=True)
-                if enc.returncode != 0:
-                    raise RuntimeError(
-                        "JPEG-XS encode failed. Ensure ffmpeg supports libsvtjpegxs.\n"
-                        f"Command: {' '.join(encode_cmd)}\n"
-                        f"stderr:\n{enc.stderr}"
-                    )
-
-                decode_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-probesize", "10M",      # Give ffmpeg more room to find headers
-                    "-i", str(out_jxs),
-                    "-frames:v", "1",
-                    "-pix_fmt", "rgb24",      # Explicitly output standard 8-bit RGB
-                    str(out_png),
-                ]
-
-                dec = subprocess.run(decode_cmd, capture_output=True, text=True)
-
-                if dec.returncode != 0:
-                    raise RuntimeError(
-                        "JPEG-XS decode failed.\n"
-                        f"Command: {' '.join(decode_cmd)}\n"
-                        f"stderr:\n{dec.stderr}"
-                    )
-
-                dec_pil = Image.open(out_png)
-                if img_u8.shape[0] == 1:
-                    dec_pil = dec_pil.convert("L")
-                    dec_np = np.array(dec_pil, dtype=np.uint8)
-                    dec_u8 = torch.from_numpy(dec_np).unsqueeze(0)
-                else:
-                    dec_pil = dec_pil.convert("RGB")
-                    dec_np = np.array(dec_pil, dtype=np.uint8)
-                    dec_u8 = torch.from_numpy(dec_np).permute(2, 0, 1).contiguous()
-
-            dec_f = dec_u8.to(torch.float32) / 255.0
+            dec_f = decoded.to(torch.float32) / 255.0
             dec_m11 = (dec_f * 2.0 - 1.0).clamp(-1.0, 1.0)
             outs.append(dec_m11)
 
         return torch.stack(outs, dim=0).to(device)
 
     return _apply_attack_preserve(x, _core)
+
+
 
 
 def gaussian_noise(x: torch.Tensor, var: float = 0.01) -> torch.Tensor:
@@ -940,6 +1346,7 @@ def gamma_correction(x: torch.Tensor, gamma: float = 1.5) -> torch.Tensor:
     return _apply_attack_preserve(x, _core)
 
 
+
 def sharpness(x: torch.Tensor, amount: float = 1.0) -> torch.Tensor:
     # Apply simple unsharp masking: add back (original - blurred) scaled by amount
     def _core(z: torch.Tensor) -> torch.Tensor:
@@ -1001,10 +1408,14 @@ def _ensure_openai_key():
 def _get_openai_client():
     import os
     import openai as _openai
-
+    
+    api_key = os.environ.get("OPENAI_API_KEY", "dummy")
+    base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:8005/v1")
+    logger.info("Creating OpenAI-compatible client with base_url=%s", base_url)
+    
     return _openai.OpenAI(
-        api_key="dummy",
-        base_url = "http://localhost:8005/v1" 
+        api_key=api_key,
+        base_url=base_url
     )
 
 
@@ -1104,6 +1515,170 @@ def _get_instruct_pix2pix(
     return pipe, dev
 
 
+def _get_qwen_image_edit_plus(
+    *,
+    model_name: str = "black-forest-labs/FLUX.2-klein-9B",
+    device: Optional[str] = None,
+    torch_dtype: Optional[torch.dtype] = None,
+):
+    # Load and cache Qwen Image Edit Plus pipeline for local image editing.
+    dev = _get_device(device)
+    if torch_dtype is None:
+        if dev.startswith("cuda") and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        elif dev.startswith("cuda"):
+            dtype = torch.float16
+        else:
+            dtype = torch.float32
+    else:
+        dtype = torch_dtype
+
+    key = f"qwen_image_edit_plus::{model_name}::{dev}::{str(dtype)}"
+    if key in _AI_CACHE:
+        return _AI_CACHE[key]
+
+    try:
+        from diffusers import QwenImageEditPlusPipeline
+    except Exception as ex:
+        raise ImportError(
+            "QwenImageEditPlusPipeline is unavailable. Update/install diffusers with "
+            "Qwen image editing support."
+        ) from ex
+
+    pipe = QwenImageEditPlusPipeline.from_pretrained(model_name, torch_dtype=dtype)
+    pipe.to(dev)
+    pipe.set_progress_bar_config(disable=None)
+
+    _AI_CACHE[key] = (pipe, dev)
+    return pipe, dev
+
+
+def _get_flux2_klein(
+    *,
+    model_name: str = "black-forest-labs/FLUX.2-klein-9B",
+    device: Optional[str] = None,
+    torch_dtype: Optional[torch.dtype] = None,
+):
+    # Load and cache FLUX.2-klein pipeline for local image generation.
+    dev = _get_device(device)
+    if torch_dtype is None:
+        if dev.startswith("cuda") and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        elif dev.startswith("cuda"):
+            dtype = torch.float16
+        else:
+            dtype = torch.float32
+    else:
+        dtype = torch_dtype
+
+    key = f"flux2_klein::{model_name}::{dev}::{str(dtype)}"
+    if key in _AI_CACHE:
+        return _AI_CACHE[key]
+
+    try:
+        from diffusers import Flux2KleinPipeline
+    except Exception as ex:
+        raise ImportError(
+            "Flux2KleinPipeline is unavailable. Update/install diffusers with "
+            "FLUX.2-klein support."
+        ) from ex
+
+    pipe = Flux2KleinPipeline.from_pretrained(model_name, torch_dtype=dtype)
+    if dev.startswith("cuda"):
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe.to(dev)
+    pipe.set_progress_bar_config(disable=None)
+
+    _AI_CACHE[key] = (pipe, dev)
+    return pipe, dev
+
+
+def _get_z_image_turbo(
+    *,
+    model_name: str = "Tongyi-MAI/Z-Image-Turbo",
+    device: Optional[str] = None,
+    torch_dtype: Optional[torch.dtype] = None,
+):
+    # Load and cache Z-Image-Turbo pipeline for local image generation.
+    dev = _get_device(device)
+    if torch_dtype is None:
+        if dev.startswith("cuda") and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        elif dev.startswith("cuda"):
+            dtype = torch.float16
+        else:
+            dtype = torch.float32
+    else:
+        dtype = torch_dtype
+
+    key = f"z_image_turbo::{model_name}::{dev}::{str(dtype)}"
+    if key in _AI_CACHE:
+        return _AI_CACHE[key]
+
+    try:
+        from diffusers import ZImagePipeline
+    except Exception as ex:
+        raise ImportError(
+            "ZImagePipeline is unavailable. Update/install diffusers with "
+            "Z-Image support."
+        ) from ex
+
+    pipe = ZImagePipeline.from_pretrained(
+        model_name,
+        torch_dtype=dtype,
+        low_cpu_mem_usage=False,
+    )
+    pipe.to(dev)
+    pipe.set_progress_bar_config(disable=None)
+
+    _AI_CACHE[key] = (pipe, dev)
+    return pipe, dev
+
+
+def _get_replace_ai_pipeline(
+    *,
+    model_name: str,
+    model_family: str = "auto",
+    device: Optional[str] = None,
+    torch_dtype: Optional[torch.dtype] = None,
+):
+    # Select and load a replace-attack pipeline by family (qwen/flux2klein/zimage/auto).
+    family = str(model_family or "auto").strip().lower()
+    if family == "auto":
+        model_name_l = str(model_name).lower()
+        if "z-image" in model_name_l or "zimage" in model_name_l:
+            family = "zimage"
+        elif "flux.2-klein" in model_name_l or "flux2-klein" in model_name_l:
+            family = "flux2klein"
+        else:
+            family = "qwen"
+
+    if family == "qwen":
+        return _get_qwen_image_edit_plus(
+            model_name=model_name,
+            device=device,
+            torch_dtype=torch_dtype,
+        )
+    if family == "flux2klein":
+        return _get_flux2_klein(
+            model_name=model_name,
+            device=device,
+            torch_dtype=torch_dtype,
+        )
+    if family == "zimage":
+        return _get_z_image_turbo(
+            model_name=model_name,
+            device=device,
+            torch_dtype=torch_dtype,
+        )
+
+    raise ValueError(
+        f"Unsupported replace model_family='{model_family}'. "
+        "Use one of: auto, qwen, flux2klein, zimage"
+    )
+
+
 def _yolov10_detection(model, image_batch: list[np.ndarray]):
     # Run YOLOv10 on numpy RGB images and return boxes + string labels per image
     results = model(image_batch)
@@ -1181,15 +1756,24 @@ def _masked_crop(image_rgb: Image.Image, mask_l: Image.Image) -> Image.Image:
 
 def _blip_caption(pil_rgb: Image.Image, *, device: Optional[str] = None) -> str:
     # Generate a caption for an image using BLIP
+    # try:
     processor, model, dev = _get_blip(device=device)
     inputs = processor(images=pil_rgb, return_tensors="pt").to(dev, torch.float32)
     out = model.generate(**inputs)
     return processor.decode(out[0], skip_special_tokens=True)
+    # except Exception as ex:
+    #     raise RuntimeError(f"BLIP captioning failed {str(ex)}") from ex
+
+
 
 
 def _openai_prompt_for_replace(image_rgb: Image.Image, crop_rgb: Image.Image) -> str:
     # Use BLIP captions + OpenAI chat model to produce a DALL·E edit prompt for replacement
     _ensure_openai_key()
+    import os
+
+    model_name = os.environ.get("OPENAI_MODEL_NAME", "gemma4")
+    logger.info("Generating replacement prompt with LLM model=%s", model_name)
     image_description = _blip_caption(image_rgb)
     masked_object_description = _blip_caption(crop_rgb)
     user_message = (
@@ -1197,41 +1781,53 @@ def _openai_prompt_for_replace(image_rgb: Image.Image, crop_rgb: Image.Image) ->
         f"'{image_description}', focusing on the areas defined by the provided masks. "
         f"Ensure the objects fit seamlessly into the scene."
     )
-    completion = _get_openai_client().chat.completions.create(
-        model="claude",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are skilled in creating prompts for DALL-E 2 image editing.",
-            },
-            {"role": "user", "content": user_message},
-        ],
-    )
-    return completion.choices[0].message.content.strip()
+    try:
+        completion = _get_openai_client().chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are skilled in creating prompts for DALL-E 2 image editing.",
+                },
+                {"role": "user", "content": user_message},
+            ],
+        )
+        logger.info("Replacement prompt generated successfully")
+        return completion.choices[0].message.content.strip()
+    except Exception as ex:
+        raise RuntimeError(f"LLM replacement prompt generation failed: {str(ex)}") from ex
 
 
 def _openai_prompt_for_create(image_rgb_512: Image.Image) -> str:
     # Use BLIP + OpenAI chat model to suggest a simple object to add, returning an edit instruction
     _ensure_openai_key()
+    import os
+
+    model_name = os.environ.get("OPENAI_MODEL_NAME", "gemma4")
+    logger.info("Generating creation prompt with LLM model=%s", model_name)
     image_description = _blip_caption(image_rgb_512)
     chatgpt_prompt = (
         f"Given the image description: '{image_description}', suggest a specific object "
         f"that would enhance the image. The object should be easily recognizable and should "
         f"not introduce complexity to the image."
     )
-    response = _get_openai_client().chat.completions.create(
-        model="claude",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an expert in suggesting simple, specific objects to enhance images based on descriptions.",
-            },
-            {"role": "user", "content": chatgpt_prompt},
-        ],
-        max_tokens=50,
-        temperature=0.7,
-    )
-    suggestion = response.choices[0].message.content.strip()
+    try:
+        response = _get_openai_client().chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert in suggesting simple, specific objects to enhance images based on descriptions.",
+                },
+                {"role": "user", "content": chatgpt_prompt},
+            ],
+            max_tokens=50,
+            temperature=0.7,
+        )
+        logger.info("Creation prompt generated successfully")
+        suggestion = response.choices[0].message.content.strip()
+    except Exception as ex:
+        raise RuntimeError("LLM creation prompt generation failed") from ex
     return f"Add '{suggestion}' to the image."
 
 
@@ -1267,17 +1863,19 @@ def replace_ai(
     *,
     threshold_area: int = 5000,
     feather_radius: int = 0,
-    openai_size: str = "1024x1024",
-    openai_image_model: str = "dall-e-2",
+    model_name: str = "black-forest-labs/FLUX.2-klein-9B",
+    model_family: str = "auto",
+    num_inference_steps: int = 40,
+    true_cfg_scale: float = 4.0,
+    guidance_scale: float = 1.0,
+    negative_prompt: str = " ",
+    seed: int = 0,
     **kwargs,
 ) -> torch.Tensor:
-    # Detect a main object, build a prompt, and call OpenAI Images Edits to replace that region
-    import os
-    import tempfile
-    import requests
-    from io import BytesIO
-
-    _ensure_openai_key()
+    
+    print("replace_ai called with parameters: uses model=%s, num_inference_steps=%s, true_cfg_scale=%s, guidance_scale=%s, negative_prompt=%s, seed=%s", model_name, num_inference_steps, true_cfg_scale, guidance_scale, negative_prompt, seed)
+    # Detect a main object, build a prompt, and replace it using local Qwen image editing.
+    logger.info("replace_ai started: threshold_area=%s feather_radius=%s", threshold_area, feather_radius)
 
     image = _chw_u8_to_pil_rgb(x_chw_u8)
     mask_l = _make_primary_mask_yolo_sam(image, threshold_area=threshold_area)
@@ -1286,52 +1884,69 @@ def replace_ai(
         mask_l = mask_l.filter(ImageFilter.GaussianBlur(radius=float(feather_radius)))
 
     crop = _masked_crop(image, mask_l)
-    prompt = _openai_prompt_for_replace(image, crop)
-    mask_rgba = _make_dalle_edit_mask(image, mask_l)
+    try:
+        prompt = _openai_prompt_for_replace(image, crop)
+    except Exception as ex:
+        logger.warning(
+            "Prompt helper failed, using fallback replacement prompt: %s", str(ex)
+        )
+        prompt = "Replace the selected foreground object with a similar object that fits the scene naturally."
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-
-    with tempfile.TemporaryDirectory() as td:
-        img_path = str(Path(td) / "image.png")
-        msk_path = str(Path(td) / "mask.png")
-
-        image.convert("RGB").save(img_path, format="PNG")
-        mask_rgba.save(msk_path, format="PNG")
-
-        url = "https://api.openai.com/v1/images/edits"
-        headers = {"Authorization": f"Bearer {api_key}"}
-
-        # Force correct part mimetypes here:
-        with open(img_path, "rb") as img_fp, open(msk_path, "rb") as msk_fp:
-            files = {
-                "image": ("image.png", img_fp, "image/png"),
-                "mask": ("mask.png", msk_fp, "image/png"),
-            }
-            data = {
-                "prompt": prompt,
-                "n": 1,
-                "size": openai_size,
-                "model": openai_image_model,
-            }
-            resp = requests.post(
-                url, headers=headers, files=files, data=data, timeout=120
-            )
-            if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"OpenAI images/edits error {resp.status_code}: {resp.text}"
-                )
-
-            payload = resp.json()
-
-    edit_url = payload["data"][0]["url"]
-    r = requests.get(edit_url)
-    r.raise_for_status()
-
-    out = (
-        Image.open(BytesIO(r.content)).convert("RGB").resize(image.size, Image.LANCZOS)
+    pipe, dev = _get_replace_ai_pipeline(
+        model_name=model_name,
+        model_family=model_family,
     )
+    gen_device = dev if dev.startswith("cuda") else "cpu"
+    generator = torch.Generator(device=gen_device).manual_seed(int(seed))
+
+    active_family = str(model_family or "auto").strip().lower()
+    if active_family == "auto":
+        model_name_l = str(model_name).lower()
+        if "z-image" in model_name_l or "zimage" in model_name_l:
+            active_family = "zimage"
+        else:
+            active_family = (
+                "flux2klein"
+                if "flux.2-klein" in model_name_l or "flux2-klein" in model_name_l
+                else "qwen"
+            )
+
+    with torch.inference_mode():
+
+        if active_family in ("flux2klein", "zimage"):
+            family_guidance_scale = float(guidance_scale)
+            if active_family == "zimage" and abs(family_guidance_scale - 1.0) < 1e-8:
+                # Z-Image-Turbo recommends guidance_scale=0; auto-adjust default value.
+                family_guidance_scale = 0.0
+            out_images = pipe(
+                prompt=str(prompt),
+                height=int(image.size[1]),
+                width=int(image.size[0]),
+                guidance_scale=family_guidance_scale,
+                num_inference_steps=int(num_inference_steps),
+                generator=generator,
+            ).images
+        else:
+            out_images = pipe(
+                image=[image.convert("RGB"), crop.convert("RGB")],
+                prompt=str(prompt),
+                generator=generator,
+                true_cfg_scale=float(true_cfg_scale),
+                negative_prompt=str(negative_prompt),
+                num_inference_steps=int(num_inference_steps),
+                guidance_scale=float(guidance_scale),
+                num_images_per_prompt=1,
+            ).images
+
+    if not out_images:
+        raise RuntimeError("replace_ai pipeline returned no images")
+
+    out = out_images[0].convert("RGB").resize(image.size, Image.LANCZOS)
+    if active_family in ("flux2klein", "zimage"):
+        # FLUX and Z-Image generate full images; keep edits local by compositing with the detected mask.
+        out = Image.composite(out, image.convert("RGB"), mask_l.convert("L"))
+
+    logger.info("replace_ai completed successfully")
     return _pil_rgb_to_chw_u8(out, x_chw_u8)
 
 
@@ -1399,6 +2014,7 @@ def create_ai(
 
     # Detect a main region, create a prompt, then use InstructPix2Pix to add an object into the image
     _ensure_openai_key()
+    logger.info("create_ai started: threshold_area=%s diffusion_steps=%s", threshold_area, diffusion_steps)
 
     image = _chw_u8_to_pil_rgb(x_chw_u8)
     mask_l = _make_primary_mask_yolo_sam(image, threshold_area=threshold_area).convert(
@@ -1420,13 +2036,16 @@ def create_ai(
         num_inference_steps=int(diffusion_steps),
         num_images_per_prompt=1,
     ).images
-
     out = out_images[0].resize(image.size, Image.LANCZOS)
+
+    logger.info("create_ai completed successfully")
     return _pil_rgb_to_chw_u8(out, x_chw_u8)
+
 
 
 __all__ = [
     "rotate_tensor",
+    "rotate_tensor_inverse"
     "rotate_tensor_keep_all",
     "crop",
     "scaled",

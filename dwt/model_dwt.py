@@ -694,7 +694,7 @@ class Extractor(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        dwt_channels = 21 + 3  # 7 subbands × 3 RGB
+        dwt_channels = 21 #+ 3  # 7 subbands × 3 RGB
 
         # Load pretrained ConvNeXT-B
         backbone = torchvision.models.convnext_base(weights='IMAGENET1K_V1')
@@ -705,7 +705,7 @@ class Extractor(nn.Module):
         # We need: (128, 21, 4, 4) — inflate by repeating 3ch weights 7 times
         # and scaling by 1/7 to preserve output magnitude
         orig_weight = backbone.features[0][0].weight.data   # (128, 3, 4, 4)
-        new_weight = orig_weight.repeat(1, 8, 1, 1) / 7.0  # (128, 21, 4, 4)
+        new_weight = orig_weight.repeat(1, 7, 1, 1) / 7.0  # (128, 21, 4, 4)
         
         new_conv = nn.Conv2d(dwt_channels, 128, kernel_size=4, stride=4, bias=False)
         new_conv.weight = nn.Parameter(new_weight)
@@ -729,8 +729,8 @@ class Extractor(nn.Module):
         """
         # print("Extractor input image shape:", image.shape)
         # print("Extractor input subbands shape:", subbands.shape)
-        x = torch.cat([subbands,image], dim=1)  # Add 3 zero channels for watermark prior
-        # x= subbands
+        # x = torch.cat([subbands,image], dim=1)  # Add 3 zero channels for watermark prior
+        x= subbands
         return self.main(x)
 
 

@@ -915,7 +915,7 @@ class Watermark(nn.Module):
         logger.info(f"Saved metric PNG pairs to {out_dir}")
 
     def load_model(self, ckpt_path):
-        state_dict = torch.load(ckpt_path, map_location=self.device)
+        state_dict = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         logger.info(f"Loading model from epoch:{state_dict['cur_epoch']}")
         self.encoder.load_state_dict(state_dict["encoder_state_dict"])
         self.encoder.train()

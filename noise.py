@@ -108,43 +108,19 @@ def _build_attack_registry(device: str) -> Dict:
                 lambda x: _apply_ai_attack_batch(x, remove_ai, "RemoveAI"),
                 "ai",
             ),
-            "ReplaceAI": (
-                lambda x: _apply_ai_attack_batch(x, replace_ai, "ReplaceAI"),
-                "ai",
-            ),
-            "CreateAI": (
-                lambda x: _apply_ai_attack_batch(x, create_ai, "CreateAI"),
-                "ai",
-            ),
+            # "ReplaceAI": (
+            #     lambda x: _apply_ai_attack_batch(x, replace_ai, "ReplaceAI"),
+            #     "ai",
+            # ),
+            # "CreateAI": (
+            #     lambda x: _apply_ai_attack_batch(x, create_ai, "CreateAI"),
+            #     "ai",
+            # ),
         }
     except Exception as ex:
         logger.warning(f"AI attacks unavailable and will be disabled: {ex}")
 
-    # train_registry = {
-    #     # ── Geometric ─────────────────────────────────────────
-    #     "Rotate": (lambda x: rotate_tensor(x, angle=10.0), "geo"),
-    #     "Crop": (lambda x: crop(x, pct=10.0), "geo"),
-    #     "Scaled": (lambda x: scaled(x, scale=1.5), "geo"),
-    #     "HFlip": (lambda x: flipping(x, mode="H"), "geo"),
-    #     "VFlip": (lambda x: flipping(x, mode="V"), "geo"),
-    #     "Resized": (lambda x: resized(x, pct=20), "geo"),
-    #     # ── Signal / Perturbation ──────────────────────────────
-    #     "JPEG50": (lambda x: jpeg_compression_train_fast(x, quality=50), "pert"),
-    #     "JPEG75": (lambda x: jpeg_compression_train_fast(x, quality=75), "pert"),
-    #     "JPEG2000": (lambda x: jpeg2000_compression_train_fast(x, quality=20), "pert"),
-    #     "JPEGXL": (lambda x: jpegxl_compression_train_fast(x, quality=50), "pert"),
-    #     "JPEGXS": (lambda x: jpegxs_compression_train_fast(x, quality=50), "pert"),
-    #     "GaussNoise": (lambda x: gaussian_noise(x, var=0.01), "pert"),
-    #     "SpeckleNoise": (lambda x: speckle_noise(x, sigma=0.1), "pert"),
-    #     "Blur3": (lambda x: blurring(x, k=3), "pert"),
-    #     "Blur5": (lambda x: blurring(x, k=5), "pert"),
-    #     "Bright125": (lambda x: brightness(x, factor=1.25), "pert"),
-    #     "Bright075": (lambda x: brightness(x, factor=0.75), "pert"),
-    #     "Sharpness": (lambda x: sharpness(x, amount=1.0), "pert"),
-    #     "Median3": (lambda x: median_filtering(x, k=3), "pert"),
-    #     **ai_attacks,
-    # }
-    
+
     eval_registry = {
         # ── Geometric ─────────────────────────────────────────
         "Rotate": (lambda x: rotate_tensor(x, angle=15.0), "geo"),
@@ -166,7 +142,7 @@ def _build_attack_registry(device: str) -> Dict:
         "JPEG2000": (lambda x: jpeg2000_compression(x, quality_layers=(10,)), "pert"),
         "JPEGXS": (lambda x: jpegxs_compression(x), "pert"),
         "JPEGXL": (lambda x: jpegxl_compression(x, quality=12), "pert"),
-        # **ai_attacks,
+        **ai_attacks,
     }
 
 
